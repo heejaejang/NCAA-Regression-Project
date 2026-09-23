@@ -1,0 +1,697 @@
+---
+title: "NCAA Scoring Prediction Project"
+author: "Jay Jang, Jason Qiu"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(dplyr)
+library(car)
+library(patchwork)
+library(MASS)
+library(corrplot)
+```
+
+# 1. LOAD DATA
+
+```{r}
+data <- read_csv("data/CollegeBasketballPlayers2022.csv")
+```
+
+# 2. CLEANING FOR ORIGINAL MODEL
+
+```{r}
+data_clean <- data %>%
+  dplyr::select(pts, yr, Min_per, ORB_per, AST_per, TO_per,
+         twoP_per, drtg, TP_per, dbpm) %>%
+  filter(!is.na(yr), !is.na(pts)) %>%
+  drop_na() %>%
+  filter(
+    between(ORB_per, 0, 100),
+    between(AST_per, 0, 100),
+    between(TO_per, 0, 100),
+    between(twoP_per, 0, 100),
+    between(TP_per, 0, 100)
+  ) %>%
+  filter(
+    pts >= 0,
+    Min_per >= 0,
+    drtg >= 0, drtg < 200,
+    dbpm < 100
+  )
+
+data_clean$yr <- factor(data_clean$yr, levels = c("So", "Jr", "Sr"))
+```
+
+# 3. FIT ORIGINAL MODEL
+
+```{r}
+model <- lm(
+  pts ~ yr + Min_per + ORB_per + AST_per + TO_per +
+    twoP_per + drtg + TP_per + dbpm + yr:Min_per,
+  data = data_clean
+)
+
+summary(model)
+```
+
+# 4. ORIGINAL MODEL DIAGNOSTICS
+
+```{r}
+e_hat <- residuals(model)
+y_hat <- fitted(model)
+
+par(mfrow = c(1,3))
+
+plot(y_hat, data_clean$pts,
+     xlab = "Fitted Values",
+     ylab = "Points per Game",
+     main = "Fitted vs Response")
+
+plot(y_hat, e_hat,
+     xlab = "Fitted Values",
+     ylab = "Residuals",
+     main = "Residuals vs Fitted")
+abline(h=0)
+
+qqnorm(e_hat, main="Normal Q-Q Plot")
+qqline(e_hat)
+
+par(mfrow=c(1,1))
+```
+
+# 5. HISTOGRAMS & DESCRIPTIVE GRAPHS
+
+```{r}
+ggplot(data_clean, aes(x = pts)) +
+  geom_histogram(
+    aes(fill = after_stat(ifelse(xmin == min(xmin), "first", "other"))),
+    color = "black",
+    bins = 80
+  ) +
+  scale_fill_manual(values = c("first" = "red", "other" = "grey70")) +
+  labs(
+    title = "Original Distribution of Points per Game (pts)",
+    x = "Points per Game (pts)",
+    y = "Count"
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+n_obs <- nrow(data_clean)
+
+p1 <- ggplot(data_clean, aes(x = yr)) +
+  geom_bar(fill = "grey70", color = "black") +
+  labs(title = "Year (yr)") +
+  theme_bw()
+
+p2 <- ggplot(data_clean, aes(x = Min_per)) +
+  geom_histogram(fill="grey70", color="black", bins=30) +
+  labs(title="Minutes Played")
+
+p3 <- ggplot(data_clean, aes(x = ORB_per)) +
+  geom_histogram(fill="grey70", color="black", bins=30)
+
+p4 <- ggplot(data_clean, aes(x = AST_per)) +
+  geom_histogram(fill="grey70", color="black", bins=30)
+
+p5 <- ggplot(data_clean, aes(x = TO_per)) +
+  geom_histogram(fill="grey70", color="black", bins=30)
+
+p6 <- ggplot(data_clean, aes(x = twoP_per)) +
+  geom_histogram(fill="grey70", color="black", bins=30)
+
+p7 <- ggplot(data_clean, aes(x = TP_per)) +
+  geom_histogram(fill="grey70", color="black", bins=30)
+
+p8 <- ggplot(data_clean, aes(x = drtg)) +
+  geom_histogram(fill="grey70", color="black", bins=30)
+
+p9 <- ggplot(data_clean, aes(x = dbpm)) +
+  geom_histogram(fill="grey70", color="black", bins=30)
+
+(p1 | p2 | p3) /
+  (p4 | p5 | p6) /
+  (p7 | p8 | p9)
+
+
+# Histogram of Min_per (Minutes Percentage) with vertical line at 5
+ggplot(data_clean, aes(x = Min_per)) +
+  geom_histogram(fill = "grey70", color = "black", bins = 30) +
+  geom_vline(xintercept = 5, color = "red", linewidth = 1) +
+  labs(
+    title = "Histogram of Original Minutes Percentage (Min_per)",
+    x = "Minutes Percentage (Min_per)",
+    y = "Count"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+```
+
+# 6. INTERACTION PLOT
+
+```{r}
+ggplot(data_clean, aes(x = Min_per, y = pts, color = yr)) +
+  geom_smooth(method="lm", se=FALSE, linewidth=1.2)
+```
+
+# 7. CORRELATION MATRIX FOR ORIGINAL MODEL
+
+```{r}
+numeric_predictors <- data_clean %>%
+  dplyr::select(Min_per, ORB_per, AST_per, TO_per,
+         twoP_per, drtg, TP_per, dbpm)
+
+cor_matrix <- cor(numeric_predictors, use="pairwise.complete.obs")
+
+corrplot(
+  cor_matrix,
+  method="color",
+  type="upper",
+  order="hclust",
+  tl.col="black",
+  tl.cex=0.8,
+  addCoef.col=NA,
+  title="Correlation Matrix of Original Model Predictors",
+  mar=c(0,0,2,0)
+)
+```
+
+# 8. CLEAN DATA FOR BOX-COX MODEL
+
+```{r}
+data_clean2 <- data %>%
+  dplyr::select(
+    pts, yr, Min_per,
+    treb,
+    AST_per, TO_per,
+    TS_per,
+    dbpm
+  ) %>%
+  filter(!is.na(yr), !is.na(pts)) %>%
+  drop_na() %>%
+  filter(
+    between(treb, 0, 100),
+    between(AST_per, 0, 100),
+    between(TO_per, 0, 100),
+    between(TS_per, 0, 100)
+  ) %>%
+  filter(
+    pts > 0,
+    Min_per > 5,
+    dbpm < 100
+  ) %>%
+  mutate(
+    yr = factor(yr, levels = c("So", "Jr", "Sr"))
+  )
+```
+
+# 9. FIT NON-TRANSFORMED MODEL 2
+
+```{r}
+model_final <- lm(
+  pts ~ yr + Min_per + treb + AST_per + TO_per +
+    TS_per + dbpm + yr:Min_per,
+  data = data_clean2
+)
+
+summary(model_final)
+```
+
+# 10. BOX-COX TRANSFORMATION
+
+```{r}
+model_initial <- lm(
+  pts ~ yr + Min_per + treb + AST_per + TO_per +
+    TS_per + dbpm + yr:Min_per,
+  data = data_clean2
+)
+
+bc <- boxcox(model_initial, lambda = seq(-2, 2, 0.1))
+
+lambda <- bc$x[which.max(bc$y)]
+
+data_clean2$bc_pts <- (data_clean2$pts^lambda - 1) / lambda
+```
+
+# 11. FIT BOX-COX MODEL
+
+```{r}
+model_bc <- lm(
+  bc_pts ~ yr + Min_per + treb + AST_per + TO_per +
+    TS_per + dbpm + yr:Min_per,
+  data = data_clean2
+)
+
+summary(model_bc)
+```
+
+# 12. BOX-COX DIAGNOSTICS
+
+```{r}
+# Residuals and fitted values from final BC model
+e_hat_final <- residuals(model_bc)
+y_hat_final <- fitted(model_bc)
+
+# Layout for 3 diagnostic plots
+par(mfrow = c(1, 3))
+
+# 1. Fitted vs Actual
+plot(
+  y_hat_final, data_clean2$bc_pts,
+  xlab = "Fitted Values (BC-transformed scale)",
+  ylab = "Observed Points per Game",
+  main = "Final Model: Fitted vs Actual"
+)
+
+# 2. Residuals vs Fitted
+plot(
+  y_hat_final, e_hat_final,
+  xlab = "Fitted Values (BC-transformed scale)",
+  ylab = "Residuals",
+  main = "Final Model: Residuals vs Fitted"
+)
+abline(h = 0)
+
+# 3. QQ Plot
+qqnorm(e_hat_final, main = "Final Model: Normal Q-Q Plot")
+qqline(e_hat_final)
+
+# Reset layout
+par(mfrow = c(1, 1))
+```
+
+# 13. PARTIAL F TESTS
+
+```{r}
+model_full <- model_bc
+
+model_no_AST <- update(model_full, . ~ . - AST_per)
+anova(model_no_AST, model_full)
+
+model_no_TO <- update(model_full, . ~ . - TO_per)
+anova(model_no_TO, model_full)
+
+model_no_TS <- update(model_full, . ~ . - TS_per)
+anova(model_no_TS, model_full)
+
+model_no_interaction <- update(model_full, . ~ . - yr:Min_per)
+anova(model_no_interaction, model_full)
+
+model_no_skills <- lm(
+  bc_pts ~ yr + Min_per + dbpm + yr:Min_per,
+  data = data_clean2
+)
+anova(model_no_skills, model_full)
+
+model_min_only <- lm(
+  bc_pts ~ Min_per + yr:Min_per,
+  data = data_clean2
+)
+anova(model_min_only, model_full)
+```
+
+# 14. INFLUENCE DIAGNOSTICS
+
+```{r}
+lev <- hatvalues(model_bc)
+rstd <- rstandard(model_bc)
+cd <- cooks.distance(model_bc)
+dff <- dffits(model_bc)
+dfb <- dfbetas(model_bc)
+
+p <- length(coef(model_bc)) - 1
+n <- nrow(data_clean2)
+
+cut_lev <- 2*(p+1)/n
+cut_r <- 4
+cut_cd <- qf(0.5, p+1, n-p-1)
+cut_dff <- 2*sqrt((p+1)/n)
+cut_dfb <- 2/sqrt(n)
+
+which(lev > cut_lev)
+which(abs(rstd) > cut_r)
+which(cd > cut_cd)
+which(abs(dff) > cut_dff)
+apply(abs(dfb) > cut_dfb, 2, which)
+```
+
+# 15. MODEL COMPARISON TABLE
+
+```{r}
+model1 <- model
+model2 <- model_bc
+
+adj_r2_model1 <- summary(model1)$adj.r.squared
+adj_r2_model2 <- summary(model2)$adj.r.squared
+
+aic1 <- AIC(model1)
+aic2 <- AIC(model2)
+
+bic1 <- BIC(model1)
+bic2 <- BIC(model2)
+
+comparison <- data.frame(
+  Metric = c("Adjusted R2", "AIC", "BIC"),
+  Model1 = c(adj_r2_model1, aic1, bic1),
+  Model2 = c(adj_r2_model2, aic2, bic2)
+)
+
+comparison
+```
+
+# 16. CORRELATION HEATMAP FOR BOX-COX MODEL
+
+```{r}
+# Select only variables used in Model 2
+data_bc <- data_clean2 %>%
+  mutate(bc_pts = (pts^lambda - 1) / lambda)
+
+# Fix namespace conflicts (use dplyr's select explicitly)
+data_corr <- data_bc %>%
+  dplyr::select(
+    bc_pts, yr, Min_per, treb, AST_per, TO_per, TS_per, dbpm
+  ) %>%
+  mutate(
+    yr = as.numeric(factor(yr))
+  )
+
+# Compute correlation matrix
+corr_mat <- cor(data_corr, use = "pairwise.complete.obs")
+
+# Plot with title
+corrplot::corrplot(
+  corr_mat,
+  method = "color",
+  col = colorRampPalette(c("red", "white", "blue"))(200),
+  addCoef.col = "black",
+  tl.col = "black",
+  number.cex = 0.7,
+  tl.cex = 0.8,
+  title = "Correlation Heatmap for Box-Cox Transformed Model",
+  mar = c(0, 0, 2, 0)   # ensures title actually appears
+)
+
+
+```
+
+**SUMMARY**
+
+```{r}
+summary(model_bc)
+```
+
+# 16. Multicollinearity check
+
+```{r}
+vif(model_bc, type = "predictor")
+```
+
+# 17. Paired plots for multicollinearity check
+
+```{r}
+# Create dataset of only the Box-Cox model predictors
+pairs_data <- data_clean2 %>%
+  mutate(
+    bc_pts = (pts^lambda - 1) / lambda,
+    yr_num = as.numeric(yr)   # convert factor to numeric for pairs plot
+  ) %>%
+  dplyr::select(
+    bc_pts,
+    yr_num,
+    Min_per,
+    treb,
+    AST_per,
+    TO_per,
+    TS_per,
+    dbpm
+  )
+
+# Paired scatterplot matrix
+pairs(
+  pairs_data,
+  main = "Paired Scatterplots for Final Box-Cox Model Predictors",
+  pch = 20,
+  cex = 0.6
+)
+
+```
+
+# 18. Graph for interaction
+
+```{r}
+# Create a sequence of Min_per values covering the observed range
+newdata <- expand.grid(
+  Min_per = seq(min(data_clean2$Min_per), max(data_clean2$Min_per), length.out = 200),
+  yr = levels(data_clean2$yr),
+  treb = mean(data_clean2$treb),
+  AST_per = mean(data_clean2$AST_per),
+  TO_per = mean(data_clean2$TO_per),
+  TS_per = mean(data_clean2$TS_per),
+  dbpm = mean(data_clean2$dbpm)
+)
+
+# Add predictions from the Box-Cox model
+newdata$pred <- predict(model_bc, newdata)
+
+ggplot(newdata, aes(x = Min_per, y = pred, color = yr)) +
+  geom_line(linewidth = 1.2) +
+  labs(
+    title = "Interaction Effect of Minutes Percentage by Year\n(Box-Cox Model)",
+    x = "Minutes Percentage (Min_per)",
+    y = "Predicted Box-Cox Transformed Points",
+    color = "Year"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    panel.border = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom"
+  )
+
+```
+
+# 19. Forward Backward Transformation
+
+```{r}
+full_formula <- bc_pts ~ yr + Min_per + treb + AST_per + TO_per +
+  TS_per + dbpm + yr:Min_per
+
+model_backward <- stepAIC(
+  lm(full_formula, data = data_clean2),
+  direction = "backward",
+  k = 2   # AIC
+)
+summary(model_backward)
+
+model_forward <- stepAIC(
+  lm(bc_pts ~ 1, data = data_clean2),
+  scope = list(upper = lm(full_formula, data = data_clean2)),
+  direction = "forward",
+  k = 2
+)
+summary(model_forward)
+
+model_stepwise <- stepAIC(
+  lm(bc_pts ~ 1, data = data_clean2),
+  scope = list(upper = lm(full_formula, data = data_clean2)),
+  direction = "both",
+  k = 2
+)
+summary(model_stepwise)
+
+AIC(model_backward, model_forward, model_stepwise)
+BIC(model_backward, model_forward, model_stepwise)
+
+```
+
+# 20. Test if Min_per is relevent 
+
+```{r}
+model_no_interaction <- update(model_bc, . ~ . - yr:Min_per)
+
+anova(model_no_interaction, model_bc)
+
+model_no_min <- update(model_no_interaction, . ~ . - Min_per)
+
+anova(model_no_interaction, model_no_min)
+```
+
+
+# Split Model 
+
+```{r}
+set.seed(67)
+
+data_val <- data_clean2     
+
+n <- nrow(data_val)
+
+train_index <- sample(1:n, size = 0.8*n, replace = FALSE) #80/20 split used
+
+train <- data_val[train_index, ]
+test  <- data_val[-train_index, ]
+```
+
+# Build model in each dataset
+
+```{r}
+
+# refit final model onto training set
+model_train <- lm(
+  bc_pts ~ yr + Min_per + treb + AST_per + TO_per + 
+    TS_per + dbpm + yr:Min_per, data = train)
+
+summary(model_train)
+
+# refit final model onto testing set
+model_test <- lm(bc_pts ~ yr + Min_per + treb + AST_per + TO_per +
+    TS_per + dbpm + yr:Min_per,data = test)
+
+summary(model_test)
+
+```
+
+
+# Compare the two models using VIF
+
+```{r}
+
+#check VIFs
+
+vif(model_train)
+vif(model_test)
+
+```
+
+# Check Assumptions
+
+```{r}
+
+# check assumptions in training
+par(mfrow=c(3,3))
+plot(train$bc_pts ~ fitted(model_train), xlab="fitted", ylab="response", 
+     main="Model in Training Data", cex.main=1.5)
+plot(residuals(model_train) ~ fitted(model_train), xlab="fitted", ylab="residuals")
+for(i in c(2,3,5,6)){
+  plot(residuals(model_train) ~ train[[i]], xlab=names(train)[i], ylab="residuals")}
+qqnorm(residuals(model_train))
+qqline(residuals(model_train))
+par(mfrow=c(1,1))
+
+# check assumptions in test
+par(mfrow = c(3,3))
+
+plot(test$bc_pts ~ fitted(model_test), xlab="fitted", ylab="response")
+title("Model in Test Data", cex.main = 1.5)
+
+plot(residuals(model_test) ~ fitted(model_test), xlab="fitted", ylab="residuals")
+for(i in c(2,3,5,6)){
+  plot(residuals(model_test) ~ test[[i]], xlab=names(test)[i], ylab="residuals")}
+
+qqnorm(residuals(model_test))
+qqline(residuals(model_test))
+par(mfrow = c(1,1))
+
+```
+
+# Check Problematic Points
+
+```{r}
+
+# checking problematic observations for train
+print("Training Dataset")
+# useful values:
+n <- nrow(train)
+p <- length(coef(model_train))-1
+# leverage cutoff
+h_cut <- 2*(p+1)/n
+print("Leverage Points")
+which(hatvalues(model_train) > h_cut)
+# outliers
+print("Outliers")
+which(rstandard(model_train) > 2 | rstandard(model_train) < -2)
+# cooks cutoff
+print("Influence (Cooks)")
+D_cut <- qf(0.5, p+1, n-p-1)
+which(cooks.distance(model_train) > D_cut)
+# DFFITS cutoff
+fits_cut <- 2*sqrt((p+1)/n)
+print("Influence (DFFITS)")
+which(abs(dffits(model_train)) > fits_cut)
+# DFBETAS cutoff
+beta_cut <- 2/sqrt(n)
+print("Influence (DFBETA)")
+for(i in 1:ncol(dfbetas(model_train))){
+  print(paste0("Beta ", i-1))
+  print(which(abs(dfbetas(model_train)[,i]) > beta_cut))}
+
+# checking problematic observations for test
+print("Test Dataset")
+# useful values:
+n <- nrow(test)
+p <- length(coef(model_test))-1
+# leverage cutoff
+h_cut <- 2*(p+1)/n
+print("Leverage Points")
+which(hatvalues(model_test) > h_cut)
+# outliers
+print("Outliers")
+which(rstandard(model_test) > 2 | rstandard(model_test) < -2)
+# cooks cutoff
+print("Influence (Cooks)")
+D_cut <- qf(0.5, p+1, n-p-1)
+which(cooks.distance(model_test) > D_cut)
+# DFFITS cutoff
+fits_cut <- 2*sqrt((p+1)/n)
+print("Influence (DFFITS)")
+which(abs(dffits(model_test)) > fits_cut)
+# DFBETAS cutoff
+beta_cut <- 2/sqrt(n)
+print("Influence (DFBETA)")
+for(i in 1:ncol(dfbetas(model_test))){
+  print(paste0("Beta ", i-1))
+  print(which(abs(dfbetas(model_test)[,i]) > beta_cut))}
+  
+```
+
+# Summary of Problematic Point Values (this can be taken out if we want, just for me to count)
+
+```{r}
+
+# Summary table of problematic points
+cat("TEST SET PROBLEM SUMMARY:\n")
+cat("Leverage points:", length(which(hatvalues(model_test) > h_cut)), "/", nrow(test), "\n")
+cat("Outliers:", length(which(abs(rstandard(model_test)) > 2)), "/", nrow(test), "\n") 
+cat("Cook's D influential:", length(which(cooks.distance(model_test) > D_cut)), "/", nrow(test), "\n")
+cat("→ Model stable: no single point dominates\n")
+
+```
+
+
+# MSE Calculations
+
+```{r}
+# Training MSE (in-sample)
+train_mse <- mean((train$bc_pts - fitted(model_train))^2)
+train_mse
+
+# Test MSE (out-of-sample predictions)
+fitted_test <- predict(model_train, newdata = test)
+test_mse <- mean((test$bc_pts - fitted_test)^2)
+test_mse
+
+#Test-Train Ratio
+test_mse/train_mse
+
+```
+
