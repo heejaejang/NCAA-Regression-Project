@@ -10,6 +10,15 @@ The analysis uses 2022 NCAA basketball statistics and multiple linear regression
 
 > How do shooting efficiency, playmaking, possession control, rebounding, defense, and player experience influence points per game?
 
+## Files
+
+| File | Description |
+|---|---|
+| `NCAA_Regression_Analysis.Rmd` | Original analysis in R |
+| `NCAA_Regression_Analysis.ipynb` | Python port (pandas / statsmodels) |
+| `data/CollegeBasketballPlayers2022.csv` | Source data |
+
+
 ## Dataset
 
 - 2022 NCAA men's basketball player statistics
